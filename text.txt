@@ -1,2 +1,465 @@
-changed
- muruga
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import json
+import requests
+from typing import Dict, List, Tuple, Optional
+import warnings
+warnings.filterwarnings('ignore')
+
+# AI/ML imports
+from sklearn.ensemble import RandomForestRegressor, IsolationForest
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, accuracy_score
+import joblib
+
+class WaterFlowPredictor:
+    """AI model for predicting water depth and flow in hydropower systems"""
+    
+    def __init__(self):
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.scaler = StandardScaler()
+        self.is_trained = False
+        
+    def prepare_features(self, data: pd.DataFrame) -> np.ndarray:
+        """Prepare features for water flow prediction"""
+        features = []
+        
+        # Time-based features
+        data['hour'] = pd.to_datetime(data['timestamp']).dt.hour
+        data['day_of_year'] = pd.to_datetime(data['timestamp']).dt.dayofyear
+        data['month'] = pd.to_datetime(data['timestamp']).dt.month
+        
+        # Weather-based features
+        feature_columns = [
+            'precipitation', 'temperature', 'humidity', 'wind_speed',
+            'upstream_flow', 'reservoir_level', 'hour', 'day_of_year', 'month'
+        ]
+        
+        return data[feature_columns].values
+    
+    def train(self, training_data: pd.DataFrame):
+        """Train the water flow prediction model"""
+        X = self.prepare_features(training_data)
+        y_depth = training_data['water_depth'].values
+        y_flow = training_data['water_flow'].values
+        
+        # Scale features
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Train models for both depth and flow
+        self.depth_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.flow_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        
+        self.depth_model.fit(X_scaled, y_depth)
+        self.flow_model.fit(X_scaled, y_flow)
+        
+        self.is_trained = True
+        print("Water flow prediction models trained successfully!")
+    
+    def predict(self, current_data: Dict) -> Dict[str, float]:
+        """Predict water depth and flow"""
+        if not self.is_trained:
+            return {"error": "Model not trained yet"}
+        
+        # Convert to DataFrame for consistent processing
+        df = pd.DataFrame([current_data])
+        X = self.prepare_features(df)
+        X_scaled = self.scaler.transform(X)
+        
+        depth_pred = self.depth_model.predict(X_scaled)[0]
+        flow_pred = self.flow_model.predict(X_scaled)[0]
+        
+        return {
+            "predicted_water_depth": round(depth_pred, 2),
+            "predicted_water_flow": round(flow_pred, 2),
+            "prediction_timestamp": datetime.now().isoformat()
+        }
+
+class TurbineFaultDetector:
+    """AI model for detecting faults in hydropower turbines"""
+    
+    def __init__(self):
+        self.anomaly_detector = IsolationForest(contamination=0.1, random_state=42)
+        self.scaler = StandardScaler()
+        self.is_trained = False
+        self.fault_threshold = 0.7
+        
+    def prepare_turbine_features(self, data: pd.DataFrame) -> np.ndarray:
+        """Prepare features for turbine fault detection"""
+        feature_columns = [
+            'vibration_x', 'vibration_y', 'vibration_z',
+            'temperature_bearing', 'temperature_stator', 'temperature_rotor',
+            'pressure_oil', 'pressure_guide_vane',
+            'current_phase_a', 'current_phase_b', 'current_phase_c',
+            'voltage', 'power_output', 'efficiency',
+            'rotational_speed', 'acoustic_emission'
+        ]
+        
+        return data[feature_columns].values
+    
+    def train(self, training_data: pd.DataFrame):
+        """Train the turbine fault detection model"""
+        X = self.prepare_turbine_features(training_data)
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Train anomaly detection model on normal operation data
+        normal_data = training_data[training_data['fault_status'] == 'normal']
+        X_normal = self.prepare_turbine_features(normal_data)
+        X_normal_scaled = self.scaler.transform(X_normal)
+        
+        self.anomaly_detector.fit(X_normal_scaled)
+        self.is_trained = True
+        print("Turbine fault detection model trained successfully!")
+    
+    def detect_fault(self, sensor_data: Dict) -> Dict:
+        """Detect faults in turbine operation"""
+        if not self.is_trained:
+            return {"error": "Model not trained yet"}
+        
+        # Convert to DataFrame for processing
+        df = pd.DataFrame([sensor_data])
+        X = self.prepare_turbine_features(df)
+        X_scaled = self.scaler.transform(X)
+        
+        # Predict anomaly (-1 for anomaly, 1 for normal)
+        anomaly_score = self.anomaly_detector.decision_function(X_scaled)[0]
+        is_anomaly = self.anomaly_detector.predict(X_scaled)[0] == -1
+        
+        # Analyze specific fault types
+        fault_analysis = self._analyze_fault_type(sensor_data)
+        
+        return {
+            "is_fault_detected": bool(is_anomaly),
+            "anomaly_score": round(anomaly_score, 4),
+            "fault_probability": round(max(0, (1 - anomaly_score) * 100), 2),
+            "fault_analysis": fault_analysis,
+            "detection_timestamp": datetime.now().isoformat(),
+            "recommendations": self._get_recommendations(fault_analysis, is_anomaly)
+        }
+    
+    def _analyze_fault_type(self, data: Dict) -> Dict:
+        """Analyze the type of fault based on sensor readings"""
+        analysis = {
+            "vibration_fault": False,
+            "temperature_fault": False,
+            "pressure_fault": False,
+            "electrical_fault": False,
+            "efficiency_fault": False
+        }
+        
+        # Vibration analysis
+        vib_total = np.sqrt(data['vibration_x']**2 + data['vibration_y']**2 + data['vibration_z']**2)
+        if vib_total > 10.0:  # Threshold in m/s²
+            analysis["vibration_fault"] = True
+        
+        # Temperature analysis
+        if (data['temperature_bearing'] > 80 or 
+            data['temperature_stator'] > 120 or 
+            data['temperature_rotor'] > 100):
+            analysis["temperature_fault"] = True
+        
+        # Pressure analysis
+        if data['pressure_oil'] < 2.0 or data['pressure_guide_vane'] > 15.0:
+            analysis["pressure_fault"] = True
+        
+        # Electrical analysis
+        current_imbalance = abs(data['current_phase_a'] - data['current_phase_b']) / data['current_phase_a']
+        if current_imbalance > 0.1 or data['voltage'] < 11000:
+            analysis["electrical_fault"] = True
+        
+        # Efficiency analysis
+        if data['efficiency'] < 0.85:
+            analysis["efficiency_fault"] = True
+        
+        return analysis
+    
+    def _get_recommendations(self, fault_analysis: Dict, is_anomaly: bool) -> List[str]:
+        """Provide maintenance recommendations based on fault analysis"""
+        recommendations = []
+        
+        if not is_anomaly:
+            return ["System operating normally. Continue regular monitoring."]
+        
+        if fault_analysis["vibration_fault"]:
+            recommendations.append("Check turbine alignment and bearing condition")
+        
+        if fault_analysis["temperature_fault"]:
+            recommendations.append("Inspect cooling system and lubrication")
+        
+        if fault_analysis["pressure_fault"]:
+            recommendations.append("Check hydraulic system and guide vane operation")
+        
+        if fault_analysis["electrical_fault"]:
+            recommendations.append("Inspect electrical connections and generator windings")
+        
+        if fault_analysis["efficiency_fault"]:
+            recommendations.append("Schedule turbine blade inspection and cleaning")
+        
+        if not recommendations:
+            recommendations.append("General maintenance check recommended")
+        
+        return recommendations
+
+class HydropowerAPI:
+    """Main API class for hydropower monitoring system"""
+    
+    def __init__(self):
+        self.water_predictor = WaterFlowPredictor()
+        self.fault_detector = TurbineFaultDetector()
+        self.data_history = []
+        
+    def initialize_models(self):
+        """Initialize and train models with sample data"""
+        # Generate sample training data for water flow prediction
+        water_training_data = self._generate_sample_water_data(1000)
+        self.water_predictor.train(water_training_data)
+        
+        # Generate sample training data for turbine fault detection
+        turbine_training_data = self._generate_sample_turbine_data(1000)
+        self.fault_detector.train(turbine_training_data)
+        
+        print("Hydropower AI monitoring system initialized successfully!")
+    
+    def _generate_sample_water_data(self, n_samples: int) -> pd.DataFrame:
+        """Generate sample water monitoring data for training"""
+        np.random.seed(42)
+        
+        data = []
+        base_time = datetime.now() - timedelta(days=365)
+        
+        for i in range(n_samples):
+            timestamp = base_time + timedelta(hours=i)
+            
+            # Seasonal patterns
+            season_factor = np.sin(2 * np.pi * timestamp.dayofyear / 365)
+            daily_factor = np.sin(2 * np.pi * timestamp.hour / 24)
+            
+            precipitation = max(0, np.random.normal(5 + 10 * season_factor, 3))
+            temperature = 15 + 20 * season_factor + np.random.normal(0, 5)
+            humidity = max(30, min(100, 60 + 20 * season_factor + np.random.normal(0, 10)))
+            wind_speed = max(0, np.random.normal(10, 3))
+            upstream_flow = 50 + 30 * season_factor + 5 * precipitation + np.random.normal(0, 5)
+            reservoir_level = 100 + 20 * season_factor + np.random.normal(0, 3)
+            
+            # Target variables (depth and flow)
+            water_depth = 5 + 0.1 * upstream_flow + 0.05 * reservoir_level + np.random.normal(0, 0.5)
+            water_flow = upstream_flow * 0.8 + np.random.normal(0, 2)
+            
+            data.append({
+                'timestamp': timestamp,
+                'precipitation': precipitation,
+                'temperature': temperature,
+                'humidity': humidity,
+                'wind_speed': wind_speed,
+                'upstream_flow': upstream_flow,
+                'reservoir_level': reservoir_level,
+                'water_depth': water_depth,
+                'water_flow': water_flow
+            })
+        
+        return pd.DataFrame(data)
+    
+    def _generate_sample_turbine_data(self, n_samples: int) -> pd.DataFrame:
+        """Generate sample turbine monitoring data for training"""
+        np.random.seed(42)
+        
+        data = []
+        
+        for i in range(n_samples):
+            # Most data should be normal operation
+            is_fault = np.random.random() < 0.1
+            
+            if is_fault:
+                # Faulty operation data
+                vibration_x = np.random.normal(8, 4)
+                vibration_y = np.random.normal(7, 3)
+                vibration_z = np.random.normal(6, 3)
+                temp_bearing = np.random.normal(85, 10)
+                temp_stator = np.random.normal(125, 15)
+                temp_rotor = np.random.normal(105, 10)
+                pressure_oil = np.random.normal(1.5, 0.5)
+                efficiency = np.random.normal(0.82, 0.05)
+                fault_status = 'fault'
+            else:
+                # Normal operation data
+                vibration_x = np.random.normal(3, 1)
+                vibration_y = np.random.normal(2.5, 0.8)
+                vibration_z = np.random.normal(2, 0.8)
+                temp_bearing = np.random.normal(65, 5)
+                temp_stator = np.random.normal(90, 8)
+                temp_rotor = np.random.normal(75, 5)
+                pressure_oil = np.random.normal(3.5, 0.3)
+                efficiency = np.random.normal(0.92, 0.02)
+                fault_status = 'normal'
+            
+            data.append({
+                'vibration_x': vibration_x,
+                'vibration_y': vibration_y,
+                'vibration_z': vibration_z,
+                'temperature_bearing': temp_bearing,
+                'temperature_stator': temp_stator,
+                'temperature_rotor': temp_rotor,
+                'pressure_oil': pressure_oil,
+                'pressure_guide_vane': np.random.normal(8, 1),
+                'current_phase_a': np.random.normal(1000, 50),
+                'current_phase_b': np.random.normal(1000, 50),
+                'current_phase_c': np.random.normal(1000, 50),
+                'voltage': np.random.normal(12000, 200),
+                'power_output': np.random.normal(50, 5),
+                'efficiency': efficiency,
+                'rotational_speed': np.random.normal(300, 10),
+                'acoustic_emission': np.random.normal(40, 5),
+                'fault_status': fault_status
+            })
+        
+        return pd.DataFrame(data)
+    
+    def predict_water_conditions(self, sensor_data: Dict) -> Dict:
+        """API endpoint for water depth and flow prediction"""
+        try:
+            prediction = self.water_predictor.predict(sensor_data)
+            self.data_history.append({
+                'type': 'water_prediction',
+                'timestamp': datetime.now().isoformat(),
+                'input': sensor_data,
+                'output': prediction
+            })
+            return {
+                "status": "success",
+                "data": prediction
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+    
+    def detect_turbine_faults(self, sensor_data: Dict) -> Dict:
+        """API endpoint for turbine fault detection"""
+        try:
+            detection_result = self.fault_detector.detect_fault(sensor_data)
+            self.data_history.append({
+                'type': 'fault_detection',
+                'timestamp': datetime.now().isoformat(),
+                'input': sensor_data,
+                'output': detection_result
+            })
+            return {
+                "status": "success",
+                "data": detection_result
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+    
+    def get_system_status(self) -> Dict:
+        """Get overall system status"""
+        return {
+            "system_status": "operational",
+            "models_trained": {
+                "water_predictor": self.water_predictor.is_trained,
+                "fault_detector": self.fault_detector.is_trained
+            },
+            "last_update": datetime.now().isoformat(),
+            "total_predictions": len(self.data_history)
+        }
+
+# Example usage and testing
+def main():
+    """Main function to demonstrate the hydropower AI system"""
+    
+    # Initialize the system
+    print("Initializing Hydropower AI Monitoring System...")
+    hydropower_ai = HydropowerAPI()
+    hydropower_ai.initialize_models()
+    
+    print("\n" + "="*60)
+    print("HYDROPOWER AI MONITORING SYSTEM - DEMO")
+    print("="*60)
+    
+    # Test water condition prediction
+    print("\n1. Water Depth and Flow Prediction:")
+    print("-" * 40)
+    
+    sample_weather_data = {
+        'timestamp': datetime.now().isoformat(),
+        'precipitation': 8.5,
+        'temperature': 22.0,
+        'humidity': 75.0,
+        'wind_speed': 12.0,
+        'upstream_flow': 65.0,
+        'reservoir_level': 110.0
+    }
+    
+    water_prediction = hydropower_ai.predict_water_conditions(sample_weather_data)
+    print(f"Input: {json.dumps(sample_weather_data, indent=2)}")
+    print(f"Prediction: {json.dumps(water_prediction, indent=2)}")
+    
+    # Test turbine fault detection
+    print("\n\n2. Turbine Fault Detection:")
+    print("-" * 40)
+    
+    # Normal operation example
+    normal_turbine_data = {
+        'vibration_x': 2.8,
+        'vibration_y': 2.1,
+        'vibration_z': 1.9,
+        'temperature_bearing': 68.0,
+        'temperature_stator': 92.0,
+        'temperature_rotor': 78.0,
+        'pressure_oil': 3.6,
+        'pressure_guide_vane': 8.2,
+        'current_phase_a': 1020.0,
+        'current_phase_b': 1015.0,
+        'current_phase_c': 1018.0,
+        'voltage': 12050.0,
+        'power_output': 52.0,
+        'efficiency': 0.91,
+        'rotational_speed': 298.0,
+        'acoustic_emission': 38.5
+    }
+    
+    print("Normal Operation Test:")
+    normal_result = hydropower_ai.detect_turbine_faults(normal_turbine_data)
+    print(f"Result: {json.dumps(normal_result['data'], indent=2)}")
+    
+    # Faulty operation example
+    faulty_turbine_data = {
+        'vibration_x': 12.5,  # High vibration
+        'vibration_y': 8.3,
+        'vibration_z': 7.1,
+        'temperature_bearing': 95.0,  # High temperature
+        'temperature_stator': 135.0,  # High temperature
+        'temperature_rotor': 110.0,   # High temperature
+        'pressure_oil': 1.2,          # Low oil pressure
+        'pressure_guide_vane': 8.2,
+        'current_phase_a': 950.0,     # Current imbalance
+        'current_phase_b': 1050.0,
+        'current_phase_c': 1020.0,
+        'voltage': 10800.0,           # Low voltage
+        'power_output': 45.0,
+        'efficiency': 0.78,           # Low efficiency
+        'rotational_speed': 295.0,
+        'acoustic_emission': 55.0     # High acoustic emission
+    }
+    
+    print("\nFaulty Operation Test:")
+    faulty_result = hydropower_ai.detect_turbine_faults(faulty_turbine_data)
+    print(f"Result: {json.dumps(faulty_result['data'], indent=2)}")
+    
+    # System status
+    print("\n\n3. System Status:")
+    print("-" * 40)
+    status = hydropower_ai.get_system_status()
+    print(f"Status: {json.dumps(status, indent=2)}")
+    
+    print("\n" + "="*60)
+    print("Demo completed successfully!")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()
